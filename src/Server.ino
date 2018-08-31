@@ -29,7 +29,7 @@ IPAddress gateway(192, 168, 0, 1);
 #define EMERGENCYMILLIS 600000 // 10 minutes
 
 // Time to wait before turning lamp on/off again
-#define DEFAULTDEBOUNCE 100000
+#define DEFAULTDEBOUNCE 20000
 
 int targetTemp = 23;
 int debounce = DEFAULTDEBOUNCE;
@@ -38,7 +38,8 @@ int currentTemp = 0;
 
 // Timer used to check how long the lamp has been on for
 // and initiate shutdown if timeout expires
-int timer = 0;
+int safetyTimer = 0;
+int debounceTimer = 0;
 bool timerError = false;
 int lastTemp = 0;
 
@@ -260,38 +261,37 @@ String page()
 
 void checkTemp()
 {
-  if (debounce == 0 && !timerError)
-  {
-    // Save the last temp so we can check that it is going up in the timer function
-    lastTemp = currentTemp;
-    currentTemp = getTemp();
+  // Save the last temp so we can check that it is going up in the timer function
+  lastTemp = currentTemp;
+  currentTemp = getTemp();
+  if (!timerError) {
     if (currentTemp < targetTemp)
     {
       lightOn = true;
     }
-    else
+    else if (millis() - debounceTimer >= DEFAULTDEBOUNCE)
     {
       lightOn = false;
+      debounceTimer = millis();
     }
-    debounce = DEFAULTDEBOUNCE;
-  }
-  else
-  {
-    debounce--;
   }
 }
 
 void updateTimer()
 {
-  if (lightOn && timer == 0)
+  if (lightOn && safetyTimer == 0)
   {
     // start the timer
-    timer = millis();
+    safetyTimer = millis();
   }
-  else if (lightOn == true && timer > 0 && lastTemp <= currentTemp)
+  else if (lightOn == true && lastTemp < currentTemp)
+  {
+    safetyTimer = millis();
+  }
+  else if (lightOn == true && lastTemp >= currentTemp)
   {
     // check to see if the light has been on too long
-    if (millis() - timer > EMERGENCYMILLIS)
+    if (millis() - safetyTimer > EMERGENCYMILLIS)
     {
       lightOn = false;
       timerError = true;
@@ -299,7 +299,7 @@ void updateTimer()
   }
   else if (!lightOn)
   {
-    timer = 0;
+    safetyTimer = 0;
   }
 }
 
@@ -345,7 +345,16 @@ void setup(void)
   server.on("/", handleRoot);
 
   server.on("/current", []() {
-    server.send(200, "text/json", "{ \"current\":" + String(currentTemp) + ", \"target\": " + targetTemp + ", \"lightOn\": " + lightOn + ", \"timerError\":" + timerError + "}");
+    server.send(200, "text/json",
+                "{ \"current\":" + String(currentTemp) +
+                    ", \"target\": " + targetTemp +
+                    ", \"lightOn\": " + lightOn +
+                    ", \"lastTemp\": " + lastTemp +
+                    ", \"currentTemp\": " + currentTemp +
+                    ", \"millis\": " + millis() +
+                    ", \"safetyTimer\": " + safetyTimer +
+                    ", \"millisMinusTimer\": " + (millis() - safetyTimer) +
+                    ", \"timerError\":" + timerError + "}");
   });
 
   server.on("/update", HTTP_POST, []() {
